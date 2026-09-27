@@ -70,40 +70,57 @@ comes only from the environment.
 **This is the most important discipline in the sourcetype pass.** A field reading zero on a sourcetype is
 only a gap if that sourcetype is *supposed* to map to that model. Whether it is supposed to is not a
 judgement call and not a guess from the device category: it is declared by the sourcetype's **vendor
-add-on CIM table**. Every audited sourcetype gets an "expected CIM" value sourced from its add-on, and the
+add-on**, in its configuration and its published CIM table. Every audited sourcetype gets an "expected CIM" value sourced from its add-on, and the
 compliance verdict is read against that expectation.
 
-Add a column to the sourcetype audit: **CIM Expected? (per vendor)** — Yes if the vendor add-on declares
-one or more CIM data models for the sourcetype, No if the add-on lists it as n/a. Label the source of
-each mapping so it is defensible:
+The expectation is not looked up from a list in this skill, because no list could cover every vendor and
+product, and any list goes stale as add-ons change between versions. It is resolved for every sourcetype,
+for any vendor, in the data collection phase (`discovery_kit.md`, D11) and held in the Environment Profile
+(P13). The method is the same whatever the source:
 
-- **vendor-doc** — confirmed in the add-on's published "Source types and CIM" table.
-- **add-on-tags** — read from the add-on's `tags.conf` / eventtypes where no table is published.
-- **known** — established add-on behaviour, not re-verified against the doc this pass.
+1. **Installed add-on configuration first.** Find the add-on that governs the sourcetype, read the
+   eventtypes that classify its events and the CIM tags on them, and match those tags to the tags each
+   model and dataset requires. The fields the add-on's `props.conf` produces give the field level
+   expectation. This is exact for the installed version.
+2. **Published documentation as the cross check.** The add-on's "Source types" or "Source types and CIM"
+   page states its intent. Where the two disagree, the disagreement is itself a finding (a lagging doc,
+   an outdated or partly disabled add-on, or a local override).
+3. **The Splunkbase package** when the add-on is not installed, read offline.
+4. **Content judgement** only when no add-on exists, recorded as such, with the missing add-on noted.
 
-Where to find the vendor CIM table, by add-on:
+Add a column to the sourcetype audit: **CIM Expected? (per vendor)**, taken from P13. **Yes** (with the
+models and datasets), **No** (the add-on lists the sourcetype as not CIM), or **Unknown** (no add-on).
+Carry the evidence label with it so every expectation can be defended: `installed-conf`, `vendor-doc`,
+`splunkbase-package`, or `content-judgement`. The rules for resolving a disagreement between config and
+documentation are in D11.7.
 
-- Splunk Add-on for Microsoft Windows: its Source types and CIM page (github.io). Confirms, for example,
-  that ActiveDirectory and the Perfmon/Script inventory types are n/a, and XmlWinEventLog carries
-  Authentication/Change/Endpoint/Malware/Updates.
-- Splunk Add-on for Unix and Linux: its Sourcetypes page. Confirms **raw auditd is n/a** — it maps to CIM
-  only after ausearch translation into linux_audit. linux_audit is Authentication/Change; linux_secure is
-  Authentication/Network_Sessions/Change. This single table corrects the most common Linux mis-audit.
-- Zscaler add-on: read `tags.conf` — ZPA maps to Authentication/Network, web gateway to Web/Proxy/Network.
-- Splunk Stream: the "Protocols that map to CIM" page — IP/TCP/UDP to Network_Traffic, HTTP to Web, DNS to
-  Network_Resolution.
-- Microsoft Cloud Services / O365 / legacy Azure add-ons: the sourcetype names in the environment
-  determine which add-on governs. `azure:aad:*` names are the legacy Microsoft Azure add-on;
-  `azure:monitor:*` are Microsoft Cloud Services. Identity feeds like `azure:aad:user` and
-  `azure:aad:device` are asset/identity enrichment, not a security data model.
-- Aruba wireless (ArubaOS) add-on: the operational sourcetypes are tagged with generic keywords
-  (security, network, system, user, wireless), not CIM data models — treat them as n/a except ClearPass,
-  which is a separate NAC add-on mapping to Authentication.
+The rule this produces: **a non-CIM source (expectation No) never carries a gap.** If a field extracts on
+it anyway, that is not compliance and not a gap; it is incidental extraction, flagged separately (Part
+6). An **Unknown** source carries no gap either until an expectation is set for it; its finding is the
+missing add-on.
 
-The rule this produces: **a non-CIM source (vendor says n/a) never carries a gap.** If a field extracts on
-it anyway, that is not compliance and not a gap — it is incidental extraction, flagged separately (Part
-6). ActiveDirectory is the canonical example: vendor n/a, so its empty CIM fields are correct, not
-failures.
+### Known pitfalls (examples to check against, not a mapping table)
+
+These come up often enough that a wrong expectation is likely. Each one is confirmed through D11 on the
+installed version like any other source; they are listed because they are easy to get wrong, not because
+the list is complete.
+
+- **Directory and inventory data is not a security model source.** For example, the Windows add-on lists
+  its Active Directory and Perfmon or script inventory sourcetypes as not CIM, so their empty CIM fields
+  are correct, not failures. Identity feeds from cloud directories are asset and identity enrichment, not
+  a data model source.
+- **A raw format the add-on only supports after translation.** Raw Linux `auditd` is not CIM in the Unix
+  and Linux add-on; it maps only once translated (ausearch) into `linux_audit`. The eventtypes are
+  declared but do not fire on the raw form (D11.5 shows it), which is easy to misread as a parser gap.
+- **Generic tags that look like CIM tags but are not.** Some add-ons tag operational events with generic
+  keywords (`security`, `network`, `system`, `user`) that no CIM dataset requires. D11.3 separates them:
+  a tag only counts when it satisfies a dataset's constraint.
+- **The sourcetype name decides which add-on governs.** Where several add-ons cover one vendor (a legacy
+  and a current cloud add-on, for example), the sourcetype prefix in the environment tells you which one's
+  eventtypes and documentation apply. Do not read the expectation from the wrong add-on.
+- **Mapping per protocol or per channel, not per sourcetype.** Wire data and multi channel event logs map
+  different protocols or channels to different models under one add-on. Record the expectation at that
+  granularity, as the documentation gives it.
 
 ---
 
@@ -150,6 +167,11 @@ index=[idx] sourcetype=[st] earliest=[window]
 instead of `authentication`/`change`), means the events never enter the model even though the macro is
 fine. Fix = tag. This is the most common real cause of a sourcetype-level zero, and it is routinely
 mislabeled as a parser gap.
+
+Read the result against P13. If the add-on declares the model's eventtypes and tags for this sourcetype
+but the events still carry `NO TAG`, the declared eventtypes are not firing: check D11.5 for which ones
+match, and whether they are disabled or shared only at app level. The fix then is making the add-on's
+eventtypes match and be visible (input format, sourcetype name, permissions), not writing new tags.
 
 ### 4.3 Parser — events reach the model and are tagged, but the field is not extracted
 
@@ -289,8 +311,9 @@ place, and for each one knows whether it is a CIM source, whether it maps, and i
 ## The one line summary
 
 Run the audit per sourcetype when the index numbers are too blended to act on: get the real
-index-to-sourcetype map from tstats, set each sourcetype's expected CIM mapping from its vendor add-on so a
-zero is only a gap where the vendor says the source should map, diagnose every gap to macro then tag then
+index-to-sourcetype map from tstats, take each sourcetype's expected CIM mapping from the profile (resolved
+from its installed add-on and checked against the add-on's documentation, for any vendor) so a
+zero is only a gap where the add-on says the source should map, diagnose every gap to macro then tag then
 parser with queries rather than guessing, surface the findings the sourcetype view brings into focus but
 which exist in any audit (incidental mapping,
 double-ingest, fragmentation), and account for every licensed sourcetype in one consistent place.

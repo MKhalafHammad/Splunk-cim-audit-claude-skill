@@ -25,7 +25,7 @@ This skill fixes both. It sorts every field into three buckets so the score only
 - **Diagnoses every gap** to one of macro, tag, parser, or value-normalisation — using queries, never inference.
 - **Runs at two resolutions:** per index and model (fast, finds the weak models), or per sourcetype (precise, produces the actionable per-source fix list).
 - **Checks findings before booking them,** including the false-negative trap where a raw-text availability check silently lies on JSON and XML sources.
-- **Sets expectations from the vendor add-on,** so a field is only ever a gap if the source's own add-on says it should map.
+- **Sets expectations from the vendor add-on, for any vendor,** so a field is only ever a gap if the source's own add-on says it should map. The expectation is read from the installed add-on's own configuration (the eventtypes that classify the sourcetype, the CIM tags on them, the tags each model requires, the fields its `props.conf` produces) and cross-checked against the add-on's published "Source types and CIM" page. No vendor list to maintain: Windows, Linux, FortiGate, Palo Alto, or anything else goes through the same steps.
 - **Produces the deliverable:** a field-level compliance workbook, macro findings, and a dependency-ordered remediation plan.
 - **Needs no extra app.** The whole audit runs on raw SPL and a few REST calls. A validator app such as SA-cim_vladiator is optional, used only as a cross-check if it is already installed.
 
@@ -72,10 +72,10 @@ Just describe the work. The skill triggers on the subject matter:
 | File | What it covers |
 |---|---|
 | `SKILL.md` | The method. Three buckets, three numbers, four fix types, the availability habit, the audit engine (raw SPL, validator apps optional), the eleven-phase runbook, reporting style. |
-| `references/discovery_kit.md` | Phase 1 data collection. The queries that build the Environment Profile: platform and CIM version, add-ons, indexes and retention, naming pattern, index-to-sourcetype map, sprawl, structured versus delimited, CIM macros verbatim, data models and acceleration, the model routing matrix, tag coverage, and licence usage, with UI fallbacks. |
+| `references/discovery_kit.md` | Phase 1 data collection. The queries that build the Environment Profile: platform and CIM version, add-ons, indexes and retention, naming pattern, index-to-sourcetype map, sprawl, structured versus delimited, CIM macros verbatim, data models and acceleration, the model routing matrix, tag coverage, licence usage, and the CIM expectation per sourcetype resolved from its vendor add-on, with UI fallbacks. |
 | `references/query_kit.md` | Copy-ready SPL for the analysis phases, with every placeholder taken from the Environment Profile: macro reading, per-field coverage from the model's own field list, the raw-versus-mapped availability check, tag gates, value formats, and volume-based speed tiers. |
 | `references/investigation_kit.md` | Verifying a finding before it is booked. The structured-source false negative and the `fieldsummary` method, the value-versus-name rule, a per-finding checklist, the batch reversal pass for correcting an existing workbook, and detection tuning traced back to normalisation. |
-| `references/sourcetype_mapping_kit.md` | The optional per-sourcetype audit. Real index-to-sourcetype mapping, the vendor add-on CIM expectation, the macro-vs-tag-vs-parser diagnosis, per-sourcetype coverage, and findings like incidental mapping and double-ingest. |
+| `references/sourcetype_mapping_kit.md` | The optional per-sourcetype audit. Real index-to-sourcetype mapping, how the vendor add-on CIM expectation is used (with known pitfalls), the macro-vs-tag-vs-parser diagnosis, per-sourcetype coverage, and findings like incidental mapping and double-ingest. |
 | `references/worked_example.md` | One environment audited end to end, showing how each phase played out and how ambiguous results were resolved. |
 
 ---
@@ -98,7 +98,7 @@ Just describe the work. The skill triggers on the subject matter:
 
 **The skill carries the method, never a client's data.** Real index names, sourcetypes, hosts, and findings stay in the engagement's profile and deliverables, not in the skill or its examples.
 
-**Vendor add-ons decide what should map.** Whether a source is expected to feed a CIM model comes from its add-on's published CIM table, not from the device category. Active Directory maps to no CIM model per Splunk's own Windows add-on, so its empty CIM fields are correct rather than a failure. Raw `auditd` is n/a until translated into `linux_audit`. Getting this from the vendor is what stops an audit raising gaps that can never be closed.
+**Vendor add-ons decide what should map.** Whether a source is expected to feed a CIM model comes from its add-on, not from the device category. The skill resolves it the same way for every vendor: the installed add-on's eventtypes, tags, and props first (exact for the installed version), the add-on's published CIM table as the cross-check, the Splunkbase package when the add-on is not installed, and a judgement from the events only when no add-on exists. Each expectation carries its evidence label, and a disagreement between the config and the documentation is a finding in itself. Active Directory maps to no CIM model per Splunk's own Windows add-on, so its empty CIM fields are correct rather than a failure. Raw `auditd` is n/a until translated into `linux_audit`. Getting this from the vendor is what stops an audit raising gaps that can never be closed.
 
 **Availability before accusation.** A low number is measured against how often the value actually appears in the raw log. Mapped far below raw availability is a real gap; mapped roughly equal to raw availability is not a gap at all.
 
@@ -113,7 +113,8 @@ Just describe the work. The skill triggers on the subject matter:
 - Claude with Agent Skills support.
 - A Splunk environment with the CIM app installed, and access to run searches and read macro definitions. REST access and read access to `_internal` let the discovery phase collect everything; where they are missing, the profile records the gap and the UI fallbacks cover it.
 - No additional Splunk app is required.
-- Vendor add-on documentation for the sources in scope (the skill lists where to find the CIM tables for the common ones).
+- Read access over REST to add-on configuration (eventtypes, tags, props, transforms) so each sourcetype's CIM expectation can be read from the installed add-on.
+- For the documentation cross-check, either web access for Claude or the add-on's "Source types and CIM" page pasted in. The skill finds the right page from the add-on's name; no per-vendor list is needed.
 
 ---
 

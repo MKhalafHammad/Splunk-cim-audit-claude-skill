@@ -13,6 +13,9 @@ Conventions used below:
 - `[Model]` is a CIM data model name as listed in the profile (for example `Authentication`).
 - Whether a sourcetype is structured or delimited is also in the profile; it decides whether the raw text
   availability check below is allowed.
+- Which models a sourcetype is expected to feed, and which fields its add-on produces, are in the profile
+  (P13, from `discovery_kit.md` D11). Score a sourcetype only against the models it is expected to feed,
+  and read a zero against the fields its add-on produces before calling it a gap.
 - Size the `earliest` window to volume: very high volume anchors get a short window like `-4h`,
   medium sources `-24h`, small sources all time.
 - Always use raw search or `summariesonly=false`. Never audit on accelerated data. Accelerated summaries

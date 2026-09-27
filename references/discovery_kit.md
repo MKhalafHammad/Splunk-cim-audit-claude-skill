@@ -39,9 +39,10 @@ item, with the collection date and the query that produced it. It holds:
 | P10 Routing | Which models actually receive events, per index and sourcetype | D8 |
 | P11 Tags | Tag coverage per sourcetype (including NO TAG) | D9 |
 | P12 Licence | Daily ingest per index and sourcetype | D10 |
-| P13 Gaps in collection | Any step that could not be run, and why | manual |
+| P13 CIM expectation | Per sourcetype: governing add-on, the CIM models and datasets it should feed, the fields its add-on produces, and the evidence behind each | D11 |
+| P14 Gaps in collection | Any step that could not be run, and why | manual |
 
-Placeholders used below: `[window]` is the discovery window (default `-30d` for counts, `-1h` or `-4h`
+Placeholders used below: `[st]` is a sourcetype from P5, `[idx]` its index. `[window]` is the discovery window (default `-30d` for counts, `-1h` or `-4h`
 for anything that reads raw events). Widen only where a result comes back suspiciously small.
 
 ---
@@ -56,8 +57,8 @@ for anything that reads raw events). Widen only where a result comes back suspic
 
 From the result record: the `Splunk_SA_CIM` version (this is the field reference standard for the whole
 audit), whether Enterprise Security is present, and every vendor technology add-on (usually `Splunk_TA_*`
-or `TA-*`) with its version. The add-on list is what the sourcetype kit later uses to decide which
-sourcetypes are CIM-expected, so a missing add-on found here is often the root cause of a later zero.
+or `TA-*`) with its version. The add-on list is what D11 later uses to decide which sourcetypes are
+CIM-expected, so a missing add-on found here is often the root cause of a later zero.
 
 Splunk version:
 
@@ -267,6 +268,175 @@ mark P12 as not collected.
 
 ---
 
+## D11. CIM expectation per sourcetype (what the vendor add-on says should map)
+
+A zero is only a gap if the sourcetype is supposed to feed that model. This step decides that for every
+sourcetype in P5, for any vendor, without a vendor list in the skill. It works because every CIM
+compliant add-on declares model membership the same way: `eventtypes.conf` classifies the sourcetype's
+events, `tags.conf` puts CIM tags on those eventtypes, and each data model selects events by tag. The
+fields come from the same add-on's `props.conf` and `transforms.conf`. All of it is readable over REST
+on the search head, and it matches the installed version exactly. The published documentation is then
+used as the cross check, not as the only source.
+
+Work through the steps below. Parsing configuration over REST is best effort: eventtype searches that use
+macros, reference other eventtypes, or select by `source::` rather than sourcetype will not parse. Read
+those by hand, or settle them with the observed check in D11.5.
+
+### D11.1 Which add-on governs each sourcetype
+
+The app that defines the sourcetype's `props.conf` stanza is normally its add-on:
+
+```
+| rest /servicesNS/-/-/configs/conf-props count=0 splunk_server=local
+| search NOT title="source::*" NOT title="host::*" NOT title="default"
+| rename title as sourcetype, eai:acl.app as app
+| stats values(app) as defining_apps by sourcetype
+```
+
+Join this to P5 by sourcetype and to P2 for the add-on's label and version. A sourcetype defined only in
+`search`, `system`, or a local app, or not defined at all, has no add-on behind it. Some add-ons attach
+their parsing to `source::` stanzas instead (per channel or per file); if a sourcetype comes back with no
+defining app, check the `source::` stanzas against the sources that sourcetype actually carries
+(`| tstats count where index=[idx] sourcetype=[st] by source`).
+
+### D11.2 What the add-on declares: eventtypes and their tags
+
+Eventtypes and the sourcetypes their searches name:
+
+```
+| rest /servicesNS/-/-/saved/eventtypes count=0 splunk_server=local
+| search disabled=0
+| rename title as eventtype, eai:acl.app as et_app, eai:acl.sharing as sharing
+| rex field=search max_match=20 "sourcetype\s*=\s*\"?(?<st_ref>[^\s\"\)]+)"
+| join type=left eventtype
+    [| rest /servicesNS/-/-/configs/conf-tags count=0 splunk_server=local
+     | search title="eventtype=*"
+     | fields - eai:* author id published updated splunk_server
+     | untable title tag state
+     | search state=enabled
+     | eval eventtype=replace(title,"^eventtype=","")
+     | stats values(tag) as tags by eventtype]
+| table eventtype, et_app, sharing, st_ref, tags, search
+```
+
+Map each `st_ref` (which may hold a wildcard) onto the real sourcetypes in P5. Rows with no `st_ref`
+select by macro, source, or another eventtype; read their `search` column. Tags can also be attached to
+stanzas other than eventtypes (`sourcetype=...` or a field value); list those separately with
+`search NOT title="eventtype=*"` in the subsearch.
+
+Record `sharing` as well. An eventtype or tag shared only at app level is invisible to searches run from
+other apps, so the model never sees it even though the add-on is installed. That is a routing finding in
+its own right.
+
+### D11.3 Which tags each model and dataset requires
+
+Take the tag requirements from the installed models, not from memory, so they match the CIM version in P1:
+
+```
+| datamodel
+| spath output=model path=modelName
+| spath output=obj path=objects{}
+| mvexpand obj
+| spath input=obj output=dataset path=objectName
+| spath input=obj output=parent path=parentName
+| spath input=obj output=constraint path=constraints{}.search
+| rex field=constraint max_match=10 "tag\s*=\s*\"?(?<req_tag>[\w\-]+)"
+| eval req_tags=mvjoin(mvsort(req_tag),",")
+| table model, dataset, parent, req_tags, constraint
+```
+
+A dataset requires every tag in its own constraint plus every tag its parents require (a child inherits
+its parent's constraint). A tag inside a `NOT (...)` clause is an exclusion, not a requirement; read the
+`constraint` column when it has one. A sourcetype is expected in a dataset when the tags its add-on
+declares (D11.2) cover all the tags the dataset requires.
+
+### D11.4 Which fields the add-on produces for the sourcetype
+
+This gives the field level expectation, the evidence for the Not Applicable bucket. Aliases and
+calculated fields, with the field each one outputs:
+
+```
+| rest /servicesNS/-/-/configs/conf-props count=0 splunk_server=local
+| search title="[st]"
+| eval stanza=title."|".'eai:acl.app'
+| fields stanza EVAL-* FIELDALIAS-* LOOKUP-* REPORT-*
+| untable stanza key value
+| rex field=value max_match=100 "(?i)\bAS(?:NEW)?\s+\"?(?<alias_out>[\w\.:\-]+)"
+| eval produced=case(like(key,"EVAL-%"), replace(key,"^EVAL-",""),
+                     like(key,"FIELDALIAS-%"), alias_out)
+| table stanza, key, produced, value
+```
+
+`LOOKUP-*` rows name their outputs after `OUTPUT` or `OUTPUTNEW` in `value`. `REPORT-*` rows name
+transforms; resolve them in `| rest /servicesNS/-/-/configs/conf-transforms count=0` (the `FORMAT` value
+or the named groups in `REGEX`). Intersect the produced fields with the model's field list
+(`query_kit.md`, 5.1).
+
+A CIM field the add-on produces is expected for that sourcetype, so a zero on it is a candidate gap. A
+CIM field the add-on does not produce is a candidate for Not Applicable, not a verdict. Automatic key
+value, JSON, and indexed extractions create fields that no `props.conf` key names, so confirm with the
+availability check (`fieldsummary` on structured sources) before excluding it.
+
+### D11.5 Observed check: which eventtypes actually fire
+
+Static configuration says what should happen. This says what does, and it settles any eventtype D11.2
+could not parse:
+
+```
+index=[idx] sourcetype=[st] earliest=-1h
+| eval eventtype=coalesce(eventtype,"NO EVENTTYPE")
+| stats count by eventtype
+```
+
+Declared eventtypes that do not fire mean the events are not in the form the add-on expects (a raw
+format the add-on only supports after a translation step, a changed log format, a wrong sourcetype name
+on the input), or the eventtype is disabled or not shared. Record it; Phase 6 diagnoses it.
+
+### D11.6 Cross check against the published documentation
+
+Every add-on documents which sourcetypes it maps to which CIM models, usually as a "Source types" or
+"Source types and CIM" page. Find it by pattern, not from a list:
+
+- Take the add-on's label and version from P2.
+- Splunk built add-ons (`Splunk_TA_*`) publish it in the add-on's documentation, on docs.splunk.com
+  ("Source types for the Splunk Add-on for ...") or, for newer add-ons, on a splunk.github.io page per
+  add-on.
+- Vendor or community add-ons link their documentation from the Splunkbase listing, or publish it on the
+  vendor's own documentation site. Search for the add-on label with "source types CIM".
+- If you can fetch web pages, read the table directly. If not, ask the user for the page or a paste of
+  the table, for all the add-ons at once in one request.
+
+Record the page URL, the add-on version it documents, and the date read. Documentation often gives the
+mapping per sourcetype and source (for example per event log channel), so record the expectation at the
+granularity the page gives.
+
+If the add-on is not installed on the search head, download its package from Splunkbase (or ask the user
+for it) and read `default/eventtypes.conf`, `default/tags.conf`, and `default/props.conf` directly. The
+same analysis applies offline.
+
+### D11.7 Setting the expectation
+
+Each sourcetype gets one of three values in P13: **Yes** (with the models and datasets), **No** (the add-on
+lists it as not CIM), or **Unknown** (no add-on covers it). Resolve disagreements like this:
+
+| Installed add-on config | Published doc | Expectation | Record |
+|---|---|---|---|
+| Declares the model | Declares the model | Yes | Strongest evidence |
+| Declares the model | Silent or n/a | Yes | Doc lags the installed version; note both versions |
+| Only a local or unrelated app declares it | n/a | No | Incidental mapping, unless the client confirms a deliberate custom mapping |
+| Does not declare it, or not installed | Declares the model | Yes | Add-on missing, outdated, disabled, or not shared: an add-on fix |
+| Does not declare it | n/a or silent | No | Non-CIM source |
+| No add-on and no documentation | | Unknown | Judge from sample events, and record that the source has no add-on |
+
+Label every row's evidence so it can be defended: `installed-conf` (D11.1 to D11.5), `vendor-doc`
+(D11.6), `splunkbase-package` (package read offline), `content-judgement` (no add-on; decided from the
+events). Where the installed config and the doc agree, record both labels.
+
+Known pitfalls that are easy to get wrong are listed in `sourcetype_mapping_kit.md`, Part 3. They are
+examples to check against, not a substitute for this step.
+
+---
+
 ## Closing the phase
 
 The profile is complete when every section is either filled or explicitly marked *not collected* with a
@@ -274,6 +444,8 @@ reason. At that point, and not before:
 
 - The scope is set from real names: which indexes, which sourcetypes, which models.
 - Every placeholder in the other kits has a real value to take.
+- Every sourcetype has a CIM expectation (Yes, No, or Unknown) with its evidence, so a later zero can be
+  judged against what the add-on says should map.
 - The intake questions that the environment answers (CIM version, naming pattern, which models are
   populated) are answered from evidence, and only the questions the environment cannot answer (scope,
   deliverable format, whether remediation is in scope) remain for the client.

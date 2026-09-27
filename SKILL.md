@@ -1,18 +1,16 @@
 ---
 name: cim-compliance-auditor
 description: >
-  Splunk CIM (Common Information Model) compliance audit and investigation skill. Use to audit or
-  document how well a Splunk environment maps data into CIM data models (Authentication, Change,
-  Endpoint, Malware, Intrusion_Detection, Network_Traffic, Web, and more): auditing field
-  compliance, diagnosing an empty or under-populated model, reading and correcting CIM index macros,
-  deciding whether a low coverage number is a real gap or a source that does not carry the field,
-  sorting sources into macro/tag/parser/value fixes, or building a field-level compliance workbook.
-  Also run the audit per sourcetype: mapping each sourcetype to its vendor add-on's expected CIM
-  models, diagnosing whether a gap is a macro, tag, or parser fix, finding incidental mapping or
-  double-ingest. Also verify findings: whether a zero is real or a false negative on a JSON/XML
-  source, running fieldsummary, correcting a workbook. Starts with a data collection phase that
-  discovers indexes, sourcetypes, add-ons, macros, tags and licence usage into an environment
-  profile. Triggers: CIM, Splunk_SA_CIM, index macros, CIM environment discovery, Vladiator,
+  Splunk CIM (Common Information Model) compliance audit and investigation skill. Audits how a
+  Splunk environment maps data into CIM models (Authentication, Change, Endpoint, Malware,
+  Intrusion_Detection, Network_Traffic, Web, and more): field compliance, diagnosing an empty or
+  under-populated model, reading and correcting CIM index macros, deciding whether low coverage is a
+  real gap or a field the source does not carry, sorting gaps into macro/tag/parser/value fixes, and
+  building a field-level workbook. Starts by collecting an environment profile (indexes,
+  sourcetypes, add-ons, macros, tags, licence) and resolving each sourcetype's expected CIM models, for
+  any vendor, from its add-on's config and published docs. Also audits per sourcetype (incidental
+  mapping, double-ingest) and verifies findings (JSON/XML false negatives, fieldsummary). Triggers: CIM,
+  Splunk_SA_CIM, index macros, CIM environment discovery, vendor add-on CIM mapping, Vladiator,
   fieldsummary, sourcetype CIM mapping, CIM false positives.
 ---
 
@@ -152,11 +150,30 @@ that is really a tag gap sends remediation to extraction work on events that nev
 full macro-vs-tag-vs-parser diagnosis, with the exact queries and the tie-breaker, is in
 `references/sourcetype_mapping_kit.md`.
 
-**A field is only a gap if the vendor add-on says the source should map it.** Every source's expected CIM
-mapping comes from its vendor add-on's published CIM table, not from the device category or a guess. A
-source the vendor lists as n/a (Active Directory, wireless operational logs, inventory collectors) never
-carries a gap; if a field extracts on it anyway that is incidental, not compliance. Setting the expected
-mapping per vendor is what stops the audit raising false gaps, and it is covered in the sourcetype kit.
+**A field is only a gap if the vendor add-on says the source should map it.** Every sourcetype's expected
+CIM mapping comes from its vendor add-on, not from the device category or a guess, and it is resolved the
+same way for any vendor, so the skill never needs a list of vendors. In Phase 1 read the installed
+add-on's own declaration (the eventtypes that classify the sourcetype, the CIM tags on them, the tags
+each model requires, and the fields its `props.conf` produces), cross check it against the add-on's
+published "Source types and CIM" page, read the Splunkbase package when the add-on is not installed, and
+fall back to judging the events only when no add-on exists. Each sourcetype gets an expectation of Yes,
+No, or Unknown with its evidence, recorded in the profile. A source the add-on lists as not CIM never
+carries a gap; if a field extracts on it anyway that is incidental, not compliance. The procedure is in
+`references/discovery_kit.md` (D11), and how the expectation is used is in the sourcetype kit.
+
+### Expected, routed, populated
+
+Three facts per sourcetype and model, set side by side, point straight at the fix:
+
+| Expected (add-on) | Reaches the model (routing matrix) | Fields populated | What it is |
+|---|---|---|---|
+| Yes | No | | Macro or tag gate. Diagnose macro first, then tag |
+| Yes, eventtypes declared | No, eventtypes not firing | | Add-on: input format, sourcetype name, or permissions stop its eventtypes matching |
+| Yes | Yes | Empty where the add-on produces the field | Parser or value work |
+| Yes | Yes | Empty where the add-on does not produce it | Candidate Not Applicable; confirm with the availability check |
+| Only by doc, not by installed config | | | Add-on outdated, partly disabled, or not installed |
+| No | Yes, or fields firing | | Incidental mapping, a finding of its own |
+| Unknown | | | No add-on covers the source; judge from events and record the missing add-on |
 
 ---
 
@@ -224,8 +241,8 @@ same findings in scope even though they are harder to isolate there.
 
 The sourcetype pass rests on three disciplines that the full method in `references/sourcetype_mapping_kit.md`
 covers: get the real index-to-sourcetype map from `tstats` rather than trusting a utilisation spreadsheet;
-set each sourcetype's expected CIM mapping from its **vendor add-on** so a zero is only a gap where the
-vendor says the source should map; and diagnose every gap to macro, then tag, then parser with queries.
+take each sourcetype's expected CIM mapping from its **vendor add-on** (resolved in Phase 1) so a zero is
+only a gap where the add-on says the source should map; and diagnose every gap to macro, then tag, then parser with queries.
 Run the index pass first to find the weak models, then the sourcetype pass on those models to produce the
 actionable, per-source, correctly-ordered fix list — but remember the goal is resolving the gaps, not
 producing a particular view of them.
@@ -261,8 +278,8 @@ Before any analysis, collect the facts the audit will stand on and record them i
 Profile: platform and CIM add-on version, installed vendor add-ons, every index with volume and retention,
 the index naming pattern as observed, the index-to-sourcetype map with volume and host counts, sourcetype
 sprawl, whether each sourcetype is structured or delimited, every CIM index macro verbatim, data models
-and acceleration, which models actually receive events per sourcetype, tag coverage per sourcetype, and
-licence usage per sourcetype. Anything that cannot be collected is recorded as not collected with the
+and acceleration, which models actually receive events per sourcetype, tag coverage per sourcetype,
+licence usage per sourcetype, and the CIM expectation per sourcetype from its vendor add-on. Anything that cannot be collected is recorded as not collected with the
 reason. **No finding is written until the profile is complete**, and every later query takes its names
 from it. Full procedure: `references/discovery_kit.md`.
 
@@ -279,13 +296,17 @@ matrix: a sourcetype with events but no model membership, whose index is not in 
 gate. Record these as the systemic finding. This is the highest leverage five minutes of the whole audit.
 
 ### Phase 4. Map domains to models
-For each domain, decide which CIM models it should feed, based on what the data actually is, not on the
-index name. A network switch feed may be Authentication and Endpoint, not Network Traffic. A load
-balancer feed may be Web. Confirm the mapping against sample events, not assumptions.
+For each domain, decide which CIM models it should feed from the CIM expectation of its sourcetypes in
+the profile, not from the index name. A network switch feed may be Authentication and Endpoint, not
+Network Traffic. A load balancer feed may be Web. Judge from what the data actually is only where the
+expectation is Unknown, and confirm the mapping against sample events either way. Set the expectation,
+the routing matrix, and the field coverage side by side (see Expected, routed, populated) so each
+mismatch already points at its fix type.
 
 ### Phase 5. Measure field coverage
 Pull each in scope model's field list from the model itself, then measure per field coverage per
-sourcetype with raw SPL (the query kit has both). A validator app export can be used as a cross check if
+sourcetype with raw SPL (the query kit has both). Score each sourcetype only against the models its
+expectation says it feeds. A validator app export can be used as a cross check if
 one is already installed. Size the time window to the sourcetype volume from the profile: short windows
 for very high volume anchors, all time for small sources. Never use accelerated data; it only contains
 events that already reached the model and hides the unmapped ones.
@@ -329,8 +350,8 @@ taken through a closed gate will change once the gate opens.
 ### Phase 11. Optional: drop to the sourcetype level
 When the index numbers are too blended to act on, or the client needs a per-source fix list, or you are
 joining CIM compliance to a utilisation or licensing review, run the sourcetype pass on the weak models.
-Take the real index-to-sourcetype map from the Phase 1 profile, set each sourcetype's expected CIM mapping
-from its vendor add-on, measure coverage per sourcetype over the audited field set, and diagnose each gap to macro
+Take the real index-to-sourcetype map and each sourcetype's expected CIM mapping from the Phase 1
+profile, measure coverage per sourcetype over the audited field set, and diagnose each gap to macro
 then tag then parser with queries. Surface the findings the sourcetype view brings into focus: incidental
 mapping on non-CIM sources, double-ingest licence findings, and fragmented sourcetypes. These belong to the
 environment, not to this method, so if the engagement stays at the index level they must still be
@@ -355,8 +376,9 @@ in `references/sourcetype_mapping_kit.md`.
 
 - `references/discovery_kit.md` — Phase 1 data collection. The queries that build the Environment
   Profile (platform, add-ons, indexes and retention, naming pattern, index-to-sourcetype map, sprawl,
-  structured versus delimited, macros, models, routing matrix, tags, licence), UI fallbacks, and the rule
-  that no finding is written before the profile is complete.
+  structured versus delimited, macros, models, routing matrix, tags, licence, and the CIM expectation
+  per sourcetype resolved from its vendor add-on for any vendor), UI fallbacks, and the rule that no
+  finding is written before the profile is complete.
 - `references/query_kit.md` — the reusable SPL query shapes for every phase, parameterised so you fill
   in index and sourcetype and run. Covers inventory, sourcetype discovery, macro reading, raw versus
   mapped availability, tag gate checks, and value format checks.
@@ -365,7 +387,7 @@ in `references/sourcetype_mapping_kit.md`.
   verification checklist, the batch reversal pass for re auditing an existing workbook, scope gaps versus
   field gaps, and detection false positive tuning traced back to normalization.
 - `references/sourcetype_mapping_kit.md` — the optional per-sourcetype audit. The real index-to-sourcetype
-  map, the vendor add-on CIM expectation that decides whether a zero is a gap, the macro-vs-tag-vs-parser
+  map, how the vendor add-on CIM expectation decides whether a zero is a gap (with known pitfalls), the macro-vs-tag-vs-parser
   diagnosis with queries and plain-language fix labels, per-sourcetype coverage measurement, and the
   findings the sourcetype view brings into focus but which exist in any audit (incidental mapping on non-CIM sources, double-ingest licence
   findings, fragmented sourcetypes, and accounting for every licensed sourcetype).
