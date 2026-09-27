@@ -20,12 +20,14 @@ This skill fixes both. It sorts every field into three buckets so the score only
 
 ## What it does
 
+- **Starts with data collection,** not assumptions. A discovery phase reads the platform and CIM version, add-ons, indexes, the index-to-sourcetype map, macros, data models, tags, and licence usage into an Environment Profile before any finding is written.
 - **Audits field-level CIM compliance** per data model, with three numbers per model instead of one misleading percentage.
 - **Diagnoses every gap** to one of macro, tag, parser, or value-normalisation — using queries, never inference.
 - **Runs at two resolutions:** per index and model (fast, finds the weak models), or per sourcetype (precise, produces the actionable per-source fix list).
 - **Checks findings before booking them,** including the false-negative trap where a raw-text availability check silently lies on JSON and XML sources.
 - **Sets expectations from the vendor add-on,** so a field is only ever a gap if the source's own add-on says it should map.
 - **Produces the deliverable:** a field-level compliance workbook, macro findings, and a dependency-ordered remediation plan.
+- **Needs no extra app.** The whole audit runs on raw SPL and a few REST calls. A validator app such as SA-cim_vladiator is optional, used only as a cross-check if it is already installed.
 
 ---
 
@@ -61,7 +63,7 @@ Just describe the work. The skill triggers on the subject matter:
 
 > "Our Windows events aren't reaching Malware. Macro, tag, or parser?"
 
-**One thing to know up front:** Claude cannot run SPL against your environment. You run the queries; Claude supplies them, then does the classification, arithmetic, and document production from your results. The skill is built around that split — every phase produces copy-ready queries and expects results back.
+**One thing to know up front:** unless Claude has direct access to your search head, it cannot run SPL against your environment. You run the queries; Claude supplies them, then does the classification, arithmetic, and document production from your results. The skill is built around that split — every phase produces copy-ready queries and expects results back. The intake only asks what the environment cannot tell (access, scope, deliverable format, whether remediation is in scope); everything else is collected in the first phase.
 
 ---
 
@@ -69,8 +71,9 @@ Just describe the work. The skill triggers on the subject matter:
 
 | File | What it covers |
 |---|---|
-| `SKILL.md` | The method. Three buckets, three numbers, four fix types, the availability habit, the ten-phase runbook, reporting style. |
-| `references/query_kit.md` | Copy-ready SPL for every phase: inventory, sourcetype discovery, macro reading, the raw-versus-mapped availability check, tag gates, value formats, and volume-based speed tiers. |
+| `SKILL.md` | The method. Three buckets, three numbers, four fix types, the availability habit, the audit engine (raw SPL, validator apps optional), the eleven-phase runbook, reporting style. |
+| `references/discovery_kit.md` | Phase 1 data collection. The queries that build the Environment Profile: platform and CIM version, add-ons, indexes and retention, naming pattern, index-to-sourcetype map, sprawl, structured versus delimited, CIM macros verbatim, data models and acceleration, the model routing matrix, tag coverage, and licence usage, with UI fallbacks. |
+| `references/query_kit.md` | Copy-ready SPL for the analysis phases, with every placeholder taken from the Environment Profile: macro reading, per-field coverage from the model's own field list, the raw-versus-mapped availability check, tag gates, value formats, and volume-based speed tiers. |
 | `references/investigation_kit.md` | Verifying a finding before it is booked. The structured-source false negative and the `fieldsummary` method, the value-versus-name rule, a per-finding checklist, the batch reversal pass for correcting an existing workbook, and detection tuning traced back to normalisation. |
 | `references/sourcetype_mapping_kit.md` | The optional per-sourcetype audit. Real index-to-sourcetype mapping, the vendor add-on CIM expectation, the macro-vs-tag-vs-parser diagnosis, per-sourcetype coverage, and findings like incidental mapping and double-ingest. |
 | `references/worked_example.md` | One environment audited end to end, showing how each phase played out and how ambiguous results were resolved. |
@@ -81,7 +84,7 @@ Just describe the work. The skill triggers on the subject matter:
 
 **Three buckets.** Every field is *Mapped* (the source carries it), *Not mapped yet* (the data is in the raw event but nothing extracts it — the real work list), or *Not produced by source* (the source does not emit it, excluded from scoring so it cannot unfairly drag the number down).
 
-**Three numbers per model.** The raw tool percentage, the corrected mapped percentage counting only applicable fields, and the fully-compliant percentage counting only fields at 90% coverage or better. The gap between the last two is how much partial work remains.
+**Three numbers per model.** The raw percentage, the corrected mapped percentage counting only applicable fields, and the fully-compliant percentage counting only fields at 90% coverage or better. The gap between the last two is how much partial work remains.
 
 **Four fix types, diagnosed in order.** *Macro* (the index is not in the model's index list — first gate, cheapest fix), *Tag* (events reach the index but are not claimed by the model), *Parser* (the value is in the raw event but not extracted), *Alias/Value* (the field extracts but the value is in vendor form). Each is confirmed by a query, never guessed, because a parser fix on events that never reach the model does nothing.
 
@@ -91,7 +94,9 @@ Just describe the work. The skill triggers on the subject matter:
 
 ## Design principles
 
-**Nothing about the environment is assumed.** Index names, sourcetype-to-index mapping, macro definitions, add-on presence — all read from the environment, never inferred from a spreadsheet or a naming convention.
+**Nothing about the environment is assumed.** Index names, sourcetype-to-index mapping, macro definitions, add-on presence — all read from the environment into the Environment Profile, never inferred from a spreadsheet or a naming convention. No finding is written until the profile is complete.
+
+**The skill carries the method, never a client's data.** Real index names, sourcetypes, hosts, and findings stay in the engagement's profile and deliverables, not in the skill or its examples.
 
 **Vendor add-ons decide what should map.** Whether a source is expected to feed a CIM model comes from its add-on's published CIM table, not from the device category. Active Directory maps to no CIM model per Splunk's own Windows add-on, so its empty CIM fields are correct rather than a failure. Raw `auditd` is n/a until translated into `linux_audit`. Getting this from the vendor is what stops an audit raising gaps that can never be closed.
 
@@ -106,7 +111,8 @@ Just describe the work. The skill triggers on the subject matter:
 ## Requirements
 
 - Claude with Agent Skills support.
-- A Splunk environment with the CIM app installed, and access to run searches and read macro definitions.
+- A Splunk environment with the CIM app installed, and access to run searches and read macro definitions. REST access and read access to `_internal` let the discovery phase collect everything; where they are missing, the profile records the gap and the UI fallbacks cover it.
+- No additional Splunk app is required.
 - Vendor add-on documentation for the sources in scope (the skill lists where to find the CIM tables for the common ones).
 
 ---
