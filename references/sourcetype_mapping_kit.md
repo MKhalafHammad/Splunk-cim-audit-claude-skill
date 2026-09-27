@@ -41,8 +41,9 @@ sourcetype (they exist in both views and must be fixed either way):
 
 ## Part 2. The environment is defined by the real index-to-sourcetype map, not a document
 
-Before anything, get the actual list of sourcetypes and which index each lives in, from the environment,
-not from a utilisation spreadsheet or an assumption:
+The actual list of sourcetypes and which index each lives in is collected in Phase 1 (`discovery_kit.md`,
+D3) and held in the Environment Profile. It comes from the environment, not from a utilisation
+spreadsheet or an assumption. The query that settles it, if you need to rerun it for a narrower scope:
 
 ```
 | tstats count where index=[all_in_scope_indexes] by index, sourcetype
@@ -126,8 +127,9 @@ Run the diagnosis in this sequence and stop at the first that explains the zero:
 | table title, definition
 ```
 
-Read whether the sourcetype's index appears in the relevant model's definition (mind wildcards: `cus*linux`
-matches `cus_r_linux`). If the index is **absent**, the model filters those events out before anything
+Read whether the sourcetype's index appears in the relevant model's definition (mind wildcards: a macro entry
+like `*linux` also matches any index ending in `linux`, and a wildcard can catch indexes you did not mean
+to include). If the index is **absent**, the model filters those events out before anything
 else — a macro gate. Fix = macro, first priority, and it goes on the macro findings, not the field detail.
 A macro pointing at `index=empty` is dead outright. **Do not label anything a macro gate without reading
 this; and do not label a tag or parser problem as a macro problem when the index is present — the

@@ -4,11 +4,15 @@ Reusable SPL shapes for every phase of a CIM compliance audit. Fill in the brack
 These are the same handful of shapes used again and again. Learn them once and the audit is fast.
 
 Conventions used below:
-- `[idx]` is your index scope. Use whatever wildcard captures the indexes you are auditing in this
-  environment. If the deployment is multi site with a repeated pattern, a wildcard can capture all sites
-  for one domain at once. If index names are flat or unpatterned, list them explicitly instead. Discover
-  the real names first, never assume a shape.
-- `[st]` is a sourcetype.
+- Every bracketed value is taken from the Environment Profile built in Phase 1
+  (`discovery_kit.md`). Never fill a placeholder from memory, from another engagement, or from a client
+  document.
+- `[idx]` is your index scope: the wildcard or explicit index list the profile recorded for the domain
+  you are auditing. If the profile says the names follow no pattern, list the indexes explicitly.
+- `[st]` is a sourcetype from the profile's index-to-sourcetype map.
+- `[Model]` is a CIM data model name as listed in the profile (for example `Authentication`).
+- Whether a sourcetype is structured or delimited is also in the profile; it decides whether the raw text
+  availability check below is allowed.
 - Size the `earliest` window to volume: very high volume anchors get a short window like `-4h`,
   medium sources `-24h`, small sources all time.
 - Always use raw search or `summariesonly=false`. Never audit on accelerated data. Accelerated summaries
@@ -16,34 +20,30 @@ Conventions used below:
 
 ---
 
-## Phase 1. Inventory: indexes and volume
+## Phase 1. Data collection
 
-Every index and its event count. Shows which hold data and which are empty.
+The full collection set (platform and add-ons, indexes and retention, naming pattern, index-to-sourcetype
+map, sprawl, structured versus delimited, macros, models, routing matrix, tags, licence) is in
+`discovery_kit.md`. The two shapes below are the ones you will rerun most often during analysis.
 
-```
-| tstats count where index=* by index
-| sort - count
-```
-
-Volume per index for one domain across all sites:
+Volume per index for one domain:
 
 ```
 | tstats count where index=[idx] by index
 ```
 
----
-
-## Phase 2. Sourcetype discovery
-
-Sourcetypes by volume in one index. The top rows are your real anchors. A long tail of tiny
-auto generated names is sourcetype sprawl.
+Sourcetypes by volume in one index. The top rows are your real anchors.
 
 ```
 | tstats count where index=[idx] by sourcetype
 | sort - count
 ```
 
-Quantify sprawl (count the junk and the events trapped in it):
+---
+
+## Phase 2. Quantify sprawl in one index
+
+Count the junk sourcetypes and the events trapped in them:
 
 ```
 | tstats count where index=[idx] sourcetype=[junk_pattern]* by sourcetype
@@ -54,8 +54,8 @@ Quantify sprawl (count the junk and the events trapped in it):
 
 ## Phase 3. Read the macros
 
-The macros are configuration, not data, so read them in Settings, Advanced search, Search macros, or
-inspect a data model's root search constraint which begins with the index macro:
+The macro definitions were collected verbatim in Phase 1 (`discovery_kit.md`, D6). If you need to see how
+a model uses its macro, inspect the model's root search constraint, which begins with the index macro:
 
 ```
 (`cim_Authentication_indexes`) tag=authentication NOT (action=success user=*$)
@@ -67,7 +67,56 @@ gate finding. This is read and compare, not a query, and it is the highest lever
 
 ---
 
-## Phase 5 and 6. The raw versus mapped availability check (the key query)
+## Phase 5. Field coverage with raw SPL (no validator app needed)
+
+### 5.1 The model's field list, from the model itself
+
+The list of fields a model defines is the denominator of the raw percentage. Take it from the installed
+model so it matches the CIM version in the profile:
+
+```
+| datamodel [Model]
+| spath output=obj_fields path=objects{}.fields{}.fieldName
+| spath output=calc_fields path=objects{}.calculations{}.outputFields{}.fieldName
+| eval field=mvdedup(mvappend(obj_fields, calc_fields))
+| mvexpand field
+| search NOT field IN ("_time","host","source","sourcetype")
+| table field
+```
+
+This returns the union across the model's datasets. Some fields belong only to a child dataset (for
+example registry fields on an Endpoint child); note which dataset each field sits in when applicability
+depends on it. Cross check the list against the CIM field reference for the installed CIM version.
+
+### 5.2 Per field coverage per sourcetype, through the model
+
+`tstats` against the model with `summariesonly=false` reads raw events through the macro and the tag, and
+counts each field as the model sees it:
+
+```
+| tstats summariesonly=false count as total,
+    count([Model].[field_a]) as field_a,
+    count([Model].[field_b]) as field_b,
+    count([Model].[field_c]) as field_c
+  from datamodel=[Model] where index=[idx] earliest=[window] by sourcetype
+| foreach field_* [ eval <<FIELD>>=round('<<FIELD>>'/total*100,1) ]
+| sort - total
+```
+
+Only events that reach the model are counted here, so a sourcetype missing from the result is a routing
+problem (macro or tag, diagnose it), not a field problem. Some CIM fields are calculated with a default
+such as `unknown` when the source is empty, which makes `count()` read full. Check the top values of any
+field that looks suspiciously complete and treat the default as unpopulated:
+
+```
+| tstats summariesonly=false count from datamodel=[Model] where index=[idx] sourcetype=[st] earliest=[window]
+  by [Model].[field]
+| sort - count
+```
+
+---
+
+## Phase 6. The raw versus mapped availability check (the key query)
 
 This is the single most important shape. For a low field, it compares how often the field is mapped
 against how often the value actually appears in the raw log. The gap between them is the finding.

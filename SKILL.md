@@ -10,8 +10,10 @@ description: >
   Also run the audit per sourcetype: mapping each sourcetype to its vendor add-on's expected CIM
   models, diagnosing whether a gap is a macro, tag, or parser fix, finding incidental mapping or
   double-ingest. Also verify findings: whether a zero is real or a false negative on a JSON/XML
-  source, running fieldsummary, correcting a workbook. Triggers: CIM, Splunk_SA_CIM, index macros,
-  Vladiator, fieldsummary, sourcetype CIM mapping, CIM false positives.
+  source, running fieldsummary, correcting a workbook. Starts with a data collection phase that
+  discovers indexes, sourcetypes, add-ons, macros, tags and licence usage into an environment
+  profile. Triggers: CIM, Splunk_SA_CIM, index macros, CIM environment discovery, Vladiator,
+  fieldsummary, sourcetype CIM mapping, CIM false positives.
 ---
 
 # Splunk CIM Compliance Auditor
@@ -43,8 +45,8 @@ Most audits jump straight to step three and measure field coverage. That is back
 fails step one returns zero no matter how clean its fields are, and a field that the source never
 produces will always look like a failure. **Always diagnose in order: macro, then tag, then field.**
 
-The second core idea is the compliance number itself. A raw tool percentage (for example from Vladiator)
-divides populated fields by every field the model defines. No single source ever fills every field a
+The second core idea is the compliance number itself. A raw percentage (whether computed in SPL or taken
+from a validator app) divides populated fields by every field the model defines. No single source ever fills every field a
 model has, so that number counts fields the source was never meant to carry as failures. It makes
 healthy data look broken. The fix is the **three bucket method** below.
 
@@ -64,29 +66,33 @@ gap was already there in the index view too, just harder to see, and it must be 
 Every environment is different. The index names, whether there are sites at all, the number and names of
 domains, which sourcetypes exist, which vendors are present, and which models are populated all vary and
 must be discovered, never assumed. The method in this skill is the constant. The specifics are always
-found by looking, starting with the inventory in Phase 1. Any index name, domain, or vendor mentioned
-anywhere in this skill or its references is an illustration only. Treat the environment in front of you
-as unknown until the inventory and sourcetype discovery phases have told you what it actually contains.
-The mapping of a domain to a model is decided by what the events actually are, not by the index name.
+found by looking, in the data collection phase (Phase 1), which records them in an **Environment
+Profile**. Every later query takes its index, sourcetype, and model names from that profile. Any vendor or
+sourcetype mentioned anywhere in this skill or its references is an illustration only. Treat the
+environment in front of you as unknown until Phase 1 has told you what it actually contains. The mapping
+of a domain to a model is decided by what the events actually are, not by the index name.
+
+The skill never carries a client's data. Real index names, sourcetype lists, hosts, users, and findings
+belong in that engagement's profile and deliverables. When you notice an environment specific name in the
+skill or its references, generalise it to a placeholder rather than reusing it.
 
 ---
 
 ## Mandatory intake
 
-Before auditing, confirm these. If not given, ask all at once in a short numbered list:
+Ask only what the environment cannot tell you. Everything else (CIM version, index names and pattern,
+sites, sourcetypes, add-ons, which models are populated) is collected in Phase 1, not asked. If not given,
+ask these all at once in a short numbered list:
 
-1. **Splunk_SA_CIM version installed** (the field reference standard, for example 8.5.0).
-2. **Index naming pattern**, whatever it is in this environment, and whether the deployment is multi site.
-   Do not assume a pattern. Some environments use a `site_domain` shape, some are flat, some have no site
-   dimension at all, and the set of domains differs everywhere. Discover the real names in Phase 1 and
-   work from those.
-3. **Which CIM models are in scope**, or audit all populated ones.
-4. **Audit engine**: Vladiator raw export, raw SPL only, or both. Raw is required either way; accelerated
-   summaries hide the unmapped events that are the whole point of the audit.
-5. **Deliverable format**: field level workbook, narrative findings document, or both.
-6. **Whether remediation is in scope** now, or findings only with remediation deferred.
+1. **Access**: can queries be run directly (and with REST and `_internal` access), or will the client run
+   the Phase 1 queries and return the results? This decides how the collection phase is executed.
+2. **Scope**: all populated CIM models, or a named subset. Any indexes or sourcetypes explicitly excluded.
+3. **Deliverable format**: field level workbook, narrative findings document, or both.
+4. **Whether remediation is in scope** now, or findings only with remediation deferred.
 
-If the user says decide for me, state your assumptions plainly and proceed.
+If the user says decide for me, state your assumptions plainly and proceed. Once Phase 1 is done, confirm
+back the facts it established (CIM version, naming pattern, populated models) in one short summary so a
+wrong assumption is caught before field work starts.
 
 ---
 
@@ -110,7 +116,7 @@ Keep Not Applicable rows visible but marked, never deleted, so every exclusion i
 
 Report all three, never just the first:
 
-- **Raw tool percentage.** Populated fields over every field the model defines. Almost always low and
+- **Raw percentage.** Populated fields over every field the model defines. Almost always low and
   usually misleading on its own.
 - **Corrected mapped percentage.** The headline. Present fields over applicable fields. The true state.
 - **Fully compliant percentage.** Present fields at 90 percent coverage or better, over applicable
@@ -226,35 +232,63 @@ producing a particular view of them.
 
 ---
 
+## The audit engine: raw SPL, validator apps optional
+
+The audit runs on raw SPL alone. Everything it needs, the model's field list, per field coverage per
+sourcetype, value checks, and the routing checks, comes from `tstats summariesonly=false`, `fieldsummary`,
+and a handful of REST calls, all in `references/query_kit.md` and `references/discovery_kit.md`. No
+extra app has to be installed on the client's search head.
+
+A field validator app such as SA-cim_vladiator is **optional**. It is a convenient way to eyeball
+coverage per model when it is already installed, but it is not required and it does not replace any step
+of the method: its percentage is the raw number (populated fields over all model fields), it does not
+know which fields apply to which source, it does not diagnose macro versus tag versus parser, and it
+cannot see events a macro or missing tag keeps out of the model. If a client already has it, use its
+export as a cross check against the SPL numbers. Do not ask a client to install it for the audit.
+
+Whichever tool produces the numbers, read raw events, never accelerated summaries. Summaries only contain
+events that already reached the model, which hides the unmapped events that are the whole point.
+
+---
+
 ## Runbook: from empty room to final result
 
-Follow these phases in order. Full detail and copy ready queries are in
-`references/query_kit.md`. A complete worked example is in `references/worked_example.md`.
+Follow these phases in order. Collection queries are in `references/discovery_kit.md`, analysis queries
+in `references/query_kit.md`. A complete worked example is in `references/worked_example.md`.
 
-### Phase 1. Inventory the environment
-List every index and its event volume. Identify which indexes hold data and which are empty. Establish
-the index naming pattern and the site wildcard that captures all sites at once. Empty indexes are an
-operational note, not a CIM finding.
+### Phase 1. Collect the environment profile (data collection)
+Before any analysis, collect the facts the audit will stand on and record them in the Environment
+Profile: platform and CIM add-on version, installed vendor add-ons, every index with volume and retention,
+the index naming pattern as observed, the index-to-sourcetype map with volume and host counts, sourcetype
+sprawl, whether each sourcetype is structured or delimited, every CIM index macro verbatim, data models
+and acceleration, which models actually receive events per sourcetype, tag coverage per sourcetype, and
+licence usage per sourcetype. Anything that cannot be collected is recorded as not collected with the
+reason. **No finding is written until the profile is complete**, and every later query takes its names
+from it. Full procedure: `references/discovery_kit.md`.
 
-### Phase 2. Discover sources and anchors
-For each populated index, list sourcetypes by event volume. The high volume sourcetypes are the real
-anchors for that domain. Flag any sourcetype sprawl (hundreds of tiny auto generated sourcetypes) as a
-likely input misconfiguration trapping real data.
+### Phase 2. Read the profile: sources, anchors, sprawl
+From the profile, identify for each populated index the high volume sourcetypes that anchor the domain,
+the stale inputs, the sourcetypes that span more than one index, and any sourcetype sprawl (hundreds of
+tiny auto generated sourcetypes) that is likely an input misconfiguration trapping real data. Empty
+indexes are an operational note, not a CIM finding.
 
 ### Phase 3. Read the macros first
-Before any field work, read every CIM index macro and compare against the indexes that hold data. Any
-index missing from a macro is a dead model for that data. Record these as the systemic finding. This is
-the highest leverage five minutes of the whole audit.
+Before any field work, compare every CIM index macro collected in Phase 1 against the indexes that hold
+data. Any index missing from a macro is a dead model for that data. Cross check against the routing
+matrix: a sourcetype with events but no model membership, whose index is not in the macro, is a macro
+gate. Record these as the systemic finding. This is the highest leverage five minutes of the whole audit.
 
 ### Phase 4. Map domains to models
 For each domain, decide which CIM models it should feed, based on what the data actually is, not on the
 index name. A network switch feed may be Authentication and Endpoint, not Network Traffic. A load
 balancer feed may be Web. Confirm the mapping against sample events, not assumptions.
 
-### Phase 5. Run the raw export or scope queries
-Use Vladiator raw export mode, or raw SPL, to get per field coverage per model. Size the time window to
-the sourcetype volume: short windows for very high volume anchors, all time for small sources. Never use
-accelerated data; it only contains events that already reached the model and hides the unmapped ones.
+### Phase 5. Measure field coverage
+Pull each in scope model's field list from the model itself, then measure per field coverage per
+sourcetype with raw SPL (the query kit has both). A validator app export can be used as a cross check if
+one is already installed. Size the time window to the sourcetype volume from the profile: short windows
+for very high volume anchors, all time for small sources. Never use accelerated data; it only contains
+events that already reached the model and hides the unmapped ones.
 
 ### Phase 6. Confirm every suspected gap against real events
 This is the heart of the audit. For each low field, run the raw versus mapped availability check. Sort
@@ -295,8 +329,8 @@ taken through a closed gate will change once the gate opens.
 ### Phase 11. Optional: drop to the sourcetype level
 When the index numbers are too blended to act on, or the client needs a per-source fix list, or you are
 joining CIM compliance to a utilisation or licensing review, run the sourcetype pass on the weak models.
-Get the real index-to-sourcetype map from `tstats`, set each sourcetype's expected CIM mapping from its
-vendor add-on, measure coverage per sourcetype over the audited field set, and diagnose each gap to macro
+Take the real index-to-sourcetype map from the Phase 1 profile, set each sourcetype's expected CIM mapping
+from its vendor add-on, measure coverage per sourcetype over the audited field set, and diagnose each gap to macro
 then tag then parser with queries. Surface the findings the sourcetype view brings into focus: incidental
 mapping on non-CIM sources, double-ingest licence findings, and fragmented sourcetypes. These belong to the
 environment, not to this method, so if the engagement stays at the index level they must still be
@@ -319,6 +353,10 @@ in `references/sourcetype_mapping_kit.md`.
 
 ## References
 
+- `references/discovery_kit.md` — Phase 1 data collection. The queries that build the Environment
+  Profile (platform, add-ons, indexes and retention, naming pattern, index-to-sourcetype map, sprawl,
+  structured versus delimited, macros, models, routing matrix, tags, licence), UI fallbacks, and the rule
+  that no finding is written before the profile is complete.
 - `references/query_kit.md` — the reusable SPL query shapes for every phase, parameterised so you fill
   in index and sourcetype and run. Covers inventory, sourcetype discovery, macro reading, raw versus
   mapped availability, tag gate checks, and value format checks.
