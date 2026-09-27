@@ -1,0 +1,14 @@
+{
+  "name": "cim-compliance-auditor",
+  "displayName": "Splunk CIM Compliance Auditor",
+  "description": "Audit how well a Splunk environment maps data into CIM data models: environment discovery, per-sourcetype CIM expectation from vendor add-ons, macro/tag/parser diagnosis, and a field-level compliance workbook.",
+  "author": {
+    "name": "MKhalafHammad",
+    "url": "https://github.com/MKhalafHammad"
+  },
+  "homepage": "https://github.com/MKhalafHammad/Splunk-cim-audit-claude-skill",
+  "repository": "https://github.com/MKhalafHammad/Splunk-cim-audit-claude-skill",
+  "license": "MIT",
+  "keywords": ["splunk", "cim", "siem", "compliance", "audit"],
+  "skills": "./"
+}
