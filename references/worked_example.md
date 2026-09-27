@@ -16,9 +16,13 @@ events before believing the number.
 
 ## The environment
 
-45 indexes across three sites, pattern `mow_{site}_{domain}`. Splunk_SA_CIM 8.5.0. Nineteen indexes held
-data, 26 were empty. Six domains carried the security relevant data: windows, security, linux, network,
-cloud, azure. A cmdb index held an LDAP asset list.
+A multi site deployment whose index names combined a site and a domain, established from the index list
+in the collection phase rather than taken from the client. Fewer than half the indexes held data; the rest
+were empty and noted as operational. Six domains carried the security relevant data: windows, security,
+linux, network, cloud, and a small cloud alert source. A separate index held an LDAP asset list.
+
+The domain labels below are generic descriptions of what each group of indexes carried. The real index
+names, site codes, and counts stay in that engagement's Environment Profile, not in this example.
 
 ---
 
@@ -28,7 +32,7 @@ Reading the seven index macros before any field work showed the whole shape of t
 Several indexes that held good data were simply not named in the macros they should feed:
 
 - Authentication macro named windows, network, firewall only. Linux and cloud were shut out.
-- Change macro named windows, firewall, network only. Linux, cloud, azure were shut out.
+- Change macro named windows, firewall, network only. Linux and both cloud sources were shut out.
 - Endpoint macro named endpoint, windows only. Linux and network were shut out.
 - Web macro named firewall, security only. Cloud was shut out.
 
@@ -112,7 +116,7 @@ cloud had Authentication, Change, and Web all gated the same way.
 **Reasoning that mattered:** the raw near 100, mapped near 0 pattern is unmistakable once you look for it.
 Do not mistake it for a field problem.
 
-### Azure: too small to score
+### Cloud alert source: too small to score
 
 A single alert source with about 20 events in total over a month. Any percentage on 20 events is
 meaningless, so it was noted and set aside rather than scored. Not every source is worth a compliance
@@ -125,7 +129,7 @@ reporting a noisy percentage.
 
 ## Where the non model feeds landed
 
-Some sources did not belong in a data model. The asset inventory in the cmdb index turned out to be a
+Some sources did not belong in a data model. The asset inventory in the asset list index turned out to be a
 daily snapshot of the asset list (flat, near identical event counts every day), which is reference data
 for the Asset and Identity framework, not a data model source. Among the security sources, a load
 balancer feed and a CDN feed belonged in Web, and a privileged access feed belonged in Change and
